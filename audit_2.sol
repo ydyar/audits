@@ -1,91 +1,128 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: AGPL-3.0-only
+pragma solidity >=0.8.0;
 
-pragma solidity ^0.8.0;
+import {ERC20} from "../tokens/ERC20.sol";
 
-import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import "@openzeppelin/contracts/access/Ownable.sol";
-import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
-import "@openzeppelin/contracts/utils/math/SafeMath.sol";
-import "./lib/TransferHelper.sol";
+/// @notice Safe ETH and ERC20 transfer library that gracefully handles missing return values.
+/// @author Solmate (https://github.com/transmissions11/solmate/blob/main/src/utils/SafeTransferLib.sol)
+/// @dev Use with caution! Some functions in this library knowingly create dirty bits at the destination of the free memory pointer.
+/// @dev Note that none of the functions in this library check that a token has code at all! That responsibility is delegated to the caller.
+library SafeTransferLib {
+    /*//////////////////////////////////////////////////////////////
+                             ETH OPERATIONS
+    //////////////////////////////////////////////////////////////*/
 
+    function safeTransferETH(address to, uint256 amount) internal {
+        bool success;
 
-contract Bridgers is ReentrancyGuard, Ownable {
-    using SafeMath for uint256;
+        /// @solidity memory-safe-assembly
+        assembly {
+            // Transfer the ETH and store if it succeeded or not.
+            success := call(gas(), to, amount, 0, 0, 0, 0)
+        }
 
-    string public name;
-
-    string public symbol;
-
-    event Swap(
-        address fromToken,
-        string toToken,
-        address sender,
-        string destination,
-        uint256 fromAmount,
-        uint256 minReturnAmount
-    );
-
-
-    event SwapEth(
-        string toToken,
-        address sender,
-        string destination,
-        uint256 fromAmount,
-        uint256 minReturnAmount
-    );
-
-    event WithdrawETH(uint256 amount);
-
-    event Withdtraw(address token, uint256 amount);
-
-    constructor() {
-        name = "Bridgers1.1";
-        symbol = "Bridgers";
+        require(success, "ETH_TRANSFER_FAILED");
     }
 
+    /*//////////////////////////////////////////////////////////////
+                            ERC20 OPERATIONS
+    //////////////////////////////////////////////////////////////*/
 
-    function swap(
-        address fromToken,
-        string memory toToken,
-        string memory destination,
-        uint256 fromAmount,
-        uint256 minReturnAmount
-    ) external nonReentrant {
-        require(fromToken != address(0), "FROMTOKEN_CANT_T_BE_0");
-        require(fromAmount > 0, "FROM_TOKEN_AMOUNT_MUST_BE_MORE_THAN_0");
-        uint256 _inputAmount;
-        uint256 _fromTokenBalanceOrigin = IERC20(fromToken).balanceOf(address(this));
-        TransferHelper.safeTransferFrom(fromToken, msg.sender, address(this), fromAmount);
-        uint256 _fromTokenBalanceNew = IERC20(fromToken).balanceOf(address(this));
-        _inputAmount = _fromTokenBalanceNew.sub(_fromTokenBalanceOrigin);
-        require(_inputAmount > 0, "NO_FROM_TOKEN_TRANSFER_TO_THIS_CONTRACT");
-        emit Swap(fromToken, toToken, msg.sender, destination, fromAmount, minReturnAmount);
+    function safeTransferFrom(
+        ERC20 token,
+        address from,
+        address to,
+        uint256 amount
+    ) internal {
+        bool success;
+
+        /// @solidity memory-safe-assembly
+        assembly {
+            // Get a pointer to some free memory.
+            let freeMemoryPointer := mload(0x40)
+
+            // Write the abi-encoded calldata into memory, beginning with the function selector.
+            mstore(freeMemoryPointer, 0x23b872dd00000000000000000000000000000000000000000000000000000000)
+            mstore(add(freeMemoryPointer, 4), and(from, 0xffffffffffffffffffffffffffffffffffffffff)) // Append and mask the "from" argument.
+            mstore(add(freeMemoryPointer, 36), and(to, 0xffffffffffffffffffffffffffffffffffffffff)) // Append and mask the "to" argument.
+            mstore(add(freeMemoryPointer, 68), amount) // Append the "amount" argument. Masking not required as it's a full 32 byte type.
+
+            success := and(
+                // Set success to whether the call reverted, if not we check it either
+                // returned exactly 1 (can't just be non-zero data), or had no return data.
+                or(and(eq(mload(0), 1), gt(returndatasize(), 31)), iszero(returndatasize())),
+                // We use 100 because the length of our calldata totals up like so: 4 + 32 * 3.
+                // We use 0 and 32 to copy up to 32 bytes of return data into the scratch space.
+                // Counterintuitively, this call must be positioned second to the or() call in the
+                // surrounding and() call or else returndatasize() will be zero during the computation.
+                call(gas(), token, 0, freeMemoryPointer, 100, 0, 32)
+            )
+        }
+
+        require(success, "TRANSFER_FROM_FAILED");
     }
 
+    function safeTransfer(
+        ERC20 token,
+        address to,
+        uint256 amount
+    ) internal {
+        bool success;
 
-    function swapEth(string memory toToken, string memory destination, uint256 minReturnAmount
-    ) external payable nonReentrant {
-        uint256 _ethAmount = msg.value;
-        require(_ethAmount > 0, "ETH_AMOUNT_MUST_BE_MORE_THAN_0");
-        emit SwapEth(toToken, msg.sender, destination, _ethAmount, minReturnAmount);
+        /// @solidity memory-safe-assembly
+        assembly {
+            // Get a pointer to some free memory.
+            let freeMemoryPointer := mload(0x40)
+
+            // Write the abi-encoded calldata into memory, beginning with the function selector.
+            mstore(freeMemoryPointer, 0xa9059cbb00000000000000000000000000000000000000000000000000000000)
+            mstore(add(freeMemoryPointer, 4), and(to, 0xffffffffffffffffffffffffffffffffffffffff)) // Append and mask the "to" argument.
+            mstore(add(freeMemoryPointer, 36), amount) // Append the "amount" argument. Masking not required as it's a full 32 byte type.
+
+            success := and(
+                // Set success to whether the call reverted, if not we check it either
+                // returned exactly 1 (can't just be non-zero data), or had no return data.
+                or(and(eq(mload(0), 1), gt(returndatasize(), 31)), iszero(returndatasize())),
+                // We use 68 because the length of our calldata totals up like so: 4 + 32 * 2.
+                // We use 0 and 32 to copy up to 32 bytes of return data into the scratch space.
+                // Counterintuitively, this call must be positioned second to the or() call in the
+                // surrounding and() call or else returndatasize() will be zero during the computation.
+                call(gas(), token, 0, freeMemoryPointer, 68, 0, 32)
+            )
+        }
+
+        require(success, "TRANSFER_FAILED");
     }
 
-    function withdrawETH(address destination, uint256 amount) external onlyOwner {
-        require(destination != address(0), "DESTINATION_CANNT_BE_0_ADDRESS");
-        uint256 balance = address(this).balance;
-        require(balance >= amount, "AMOUNT_CANNT_MORE_THAN_BALANCE");
-        TransferHelper.safeTransferETH(destination, amount);
-        emit WithdrawETH(amount);
-    }
+    function safeApprove(
+        ERC20 token,
+        address to,
+        uint256 amount
+    ) internal {
+        bool success;
 
-    function withdraw(address token, address destination, uint256 amount) external onlyOwner {
-        require(destination != address(0), "DESTINATION_CANNT_BE_0_ADDRESS");
-        require(token != address(0), "TOKEN_MUST_NOT_BE_0");
-        uint256 balance = IERC20(token).balanceOf(address(this));
-        require(balance >= amount, "AMOUNT_CANNT_MORE_THAN_BALANCE");
-        TransferHelper.safeTransfer(token, destination, amount);
-        emit Withdtraw(token, amount);
-    }
+        /// @solidity memory-safe-assembly
+        assembly {
+            // Get a pointer to some free memory.
+            let freeMemoryPointer := mload(0x40)
 
-    receive() external payable {}
+            // Write the abi-encoded calldata into memory, beginning with the function selector.
+            mstore(freeMemoryPointer, 0x095ea7b300000000000000000000000000000000000000000000000000000000)
+            mstore(add(freeMemoryPointer, 4), and(to, 0xffffffffffffffffffffffffffffffffffffffff)) // Append and mask the "to" argument.
+            mstore(add(freeMemoryPointer, 36), amount) // Append the "amount" argument. Masking not required as it's a full 32 byte type.
+
+            success := and(
+                // Set success to whether the call reverted, if not we check it either
+                // returned exactly 1 (can't just be non-zero data), or had no return data.
+                or(and(eq(mload(0), 1), gt(returndatasize(), 31)), iszero(returndatasize())),
+                // We use 68 because the length of our calldata totals up like so: 4 + 32 * 2.
+                // We use 0 and 32 to copy up to 32 bytes of return data into the scratch space.
+                // Counterintuitively, this call must be positioned second to the or() call in the
+                // surrounding and() call or else returndatasize() will be zero during the computation.
+                call(gas(), token, 0, freeMemoryPointer, 68, 0, 32)
+            )
+        }
+
+        require(success, "APPROVE_FAILED");
+    }
 }
